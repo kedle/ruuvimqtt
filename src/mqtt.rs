@@ -7,19 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::error::Error;
 use tokio::sync::{Mutex, mpsc::{Sender, Receiver}};
-use ntex::time::{sleep, Seconds};
-use ntex::util::{join_all, lazy, ByteString, Bytes, Ready};
-use ntex_mqtt::v3::{
-    client, codec, ControlMessage, Handshake, HandshakeAck, MqttServer, Publish, Session,
-};
+use tokio::time::{sleep, Duration};
+use rumqttc::{MqttOptions, AsyncClient, QoS};
+
 use super::ruuvi;
 
-
-// use mqtt::control::variable_header::ConnectReturnCode;
-// use mqtt::packet::*;
-// use mqtt::{Decodable, Encodable, QualityOfService};
-#[derive(Debug)]
-struct AsdError;
 
 pub fn generate_client_id() -> String {
     format!("ruuvimqtt/{}", Uuid::new_v4())
@@ -29,42 +21,18 @@ pub async fn mqtt_sender(
     mut to_mqtt_rx: Receiver<ruuvi::Measurement>
     ) -> () {
 
+    let mut mqttoptions = MqttOptions::new(generate_client_id(), "10.0.10.10", 1883);
+    mqttoptions.set_keep_alive(Duration::from_secs(5));
+    let (mut client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
 
-    let client = client::MqttConnector::new("10.0.10.10:1883")
-        .client_id(generate_client_id())
-        .max_packet_size(30)
-        .keep_alive(Seconds(3))
-        .connect()
-        .await
-        .unwrap();
-
-    let sink = client.sink();
-
-    // ntex::rt::spawn(client.start_default());
-        // publish handler
-    let router = client.resource("response", |pkt: Publish| async move {
-        log::info!(
-            "incoming publish: {:?} -> {:?} payload {:?}",
-            pkt.id(),
-            pkt.topic(),
-            pkt.payload()
-        );
-        Ok::<_, AsdError>(())
-    });
-    ntex::rt::spawn(router.start_default());
+    client.subscribe("hello/rumqtt", QoS::AtMostOnce).await.unwrap();
 
     while let Some(message) = to_mqtt_rx.recv().await {
-        let ack = sink
-            .publish(ByteString::from_static("topic"), "neekeri".into())
-            .send_at_least_once()
-            .await
-            .unwrap();
-        // debug!("mesg: {:?}", message);
-        debug!("Ack received: {:?}", ack);
+        debug!("msg received: {:?}", message);
+        let ack = client.publish("hello/rumqtt", QoS::AtLeastOnce, false, "neger").await.unwrap();
+        debug!("ack: {:?}",ack);
 
     }
-
-    sink.close();
 
     ()
 }
@@ -82,9 +50,28 @@ pub async fn add_latest_measurements_to_send_queue(
     loop {
         debug!("Pretending to send measurements!");
         let mut latest_changer = latest.lock().await;
-        debug!("MQTT latest: {:?}",latest_changer);
-        sleep(Seconds(10)).await;
+
+        let mut measurements: Vec<ruuvi::Measurement> = latest_changer.values().cloned().collect();
+
+        for (_, val) in latest_changer.iter_mut() {
+            val.published = true;
+        }
+
         drop(latest_changer);
+
+        for measurement in measurements {
+            match measurement.published {
+                true => { debug!("Found measurement that is already published, ignoring")},
+                false => {
+                    debug!("Found new measurement: {}", measurement.to_owned());
+                    from_ruuvi_tx.send(measurement.clone()).await;
+                }
+            };
+        }
+
+        // debug!("measurements: {:?}",measurements);
+
+        sleep(Duration::from_secs(10)).await;
     }
     Ok(())
 }

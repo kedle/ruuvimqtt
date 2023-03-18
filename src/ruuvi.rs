@@ -2,23 +2,81 @@ use btleplug::api::{Central, CentralEvent, Manager as _, ScanFilter};
 use btleplug::platform::{Adapter, Manager};
 use futures::stream::StreamExt;
 use log::{info, error, debug};
-use ruuvi_sensor_protocol::{SensorValues, MacAddress};
+use ruuvi_sensor_protocol::{SensorValues, MacAddress, Temperature, Humidity, Pressure, BatteryPotential, TransmitterPower, MovementCounter, MeasurementSequenceNumber};
 use tokio::sync::Mutex;
-use tokio::time;
 use std::error::Error;
+use std::fmt;
 use std::time::SystemTime;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::ops::Deref;
 
 const MANUFACTURER_DATA_ID: u16 = 0x0499;
 
 // Measurement from RuuviTag sensor
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Measurement {
     pub timestamp: u64,
     pub published: bool,
     pub values: SensorValues,
+}
+
+// Formats a measurement as JSON suitable for publishing with MQTT
+impl fmt::Display for Measurement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+        let mac = match self.values.mac_address() {
+            Some(val) => {
+                let string_mac: String = val.iter().map( |&byte| format!("{:x}", byte)+ ":").collect();
+                format!("\"mac\":\"{}\"",string_mac)},
+            None => {format!("\"mac\":null")},
+        };
+
+        let temperature = match self.values.temperature_as_millicelsius() {
+            Some(val) => {format!("\"temperature\":\"{}\"", val.to_string())},
+            None => {format!("\"temperature\":null")},
+        };
+
+        let humidity = match self.values.humidity_as_ppm() {
+            Some(val) => {format!("\"humidity\":\"{}\"", val.to_string())},
+            None => {format!("\"humidity\":null")},
+        };
+
+        let pressure = match self.values.pressure_as_pascals() {
+            Some(val) => {format!("\"pressure\":\"{}\"", val.to_string())},
+            None => {format!("\"pressure\":null")},
+        };
+
+        let battery = match self.values.battery_potential_as_millivolts() {
+            Some(val) => {format!("\"battery\":\"{}\"", val.to_string())},
+            None => {format!("\"battery\":null")},
+        };
+
+        let movement = match self.values.movement_counter() {
+            Some(val) => {format!("\"movement\":\"{}\"", val.to_string())},
+            None => {format!("\"movement\":null")},
+        };
+
+        let sq = match self.values.measurement_sequence_number() {
+            Some(val) => {format!("\"sq\":\"{}\"", val.to_string())},
+            None => {format!("\"sq\":null")},
+        };
+
+        let tx = match self.values.tx_power_as_dbm() {
+            Some(val) => {format!("\"tx\":\"{}\"", val.to_string())},
+            None => {format!("\"tx\":null")},
+        };
+
+        write!(f, "{{\"time\":\"{}\",{},{},{},{},{},{},{},{}}}",
+        self.timestamp,
+        mac,
+        temperature,
+        humidity,
+        pressure,
+        battery,
+        movement,
+        sq,
+        tx)
+    }
 }
 
 fn unix_time() -> u64 {

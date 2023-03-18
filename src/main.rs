@@ -3,8 +3,6 @@ use std::sync::Arc;
 use log::{debug, info};
 use clap::Parser;
 use tokio::sync::{Mutex, mpsc};
-use ntex_mqtt::v3;
-use ntex::time::{sleep, Seconds};
 
 pub mod mqtt;
 pub mod ruuvi;
@@ -40,7 +38,7 @@ struct Options {
 }
 
 
-#[ntex::main]
+#[tokio::main]
 async fn main() {
     env_logger::init();
 
@@ -63,17 +61,18 @@ async fn main() {
     let mut handles = Vec::new();
 
     // Task for polling BLE messages and storing them in an array
-    handles.push(ntex::rt::spawn(async move {
+    handles.push(tokio::task::spawn(async move {
         _ = ruuvi::poll(latest).await;
     }));
 
     // Task executed periodically to add measurements in a queue (channel)
     // to be sent to the MQTT broker
-    handles.push(ntex::rt::spawn(async move {
+    handles.push(tokio::task::spawn(async move {
         _ = mqtt::add_latest_measurements_to_send_queue(to_mqtt_tx, latest2).await;
     }));
 
-    handles.push(ntex::rt::spawn(async move {
+    // Picks measurements from channel and sends them to MQTT broker
+    handles.push(tokio::task::spawn(async move {
         _ = mqtt::mqtt_sender(to_mqtt_rx).await;
     }));
 
