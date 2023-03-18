@@ -1,19 +1,15 @@
-use clap::Parser;
-// use ruuvi_sensor_protocol::{SensorValues, Humidity, Temperature, ParseError};
-use tokio::sync::{Mutex, mpsc};
-use tokio::time;
-use std::mem;
 use std::collections::HashMap;
 use std::sync::Arc;
-//use tracing::{info, Level};
-//use tracing_subscriber;
 use log::{debug, info};
+use clap::Parser;
+use tokio::sync::{Mutex, mpsc};
+use ntex_mqtt::v3;
+use ntex::time::{sleep, Seconds};
 
+pub mod mqtt;
 pub mod ruuvi;
 pub mod utils;
-use utils::Alias;
 
-/// Simple program to greet a person
 #[derive(Parser, Debug)]
 #[clap(author, about, rename_all = "kebab-case")]
 struct Options {
@@ -39,12 +35,12 @@ struct Options {
 
     #[clap(long, parse(try_from_str = utils::parse_alias))]
     /// example: DE:AD:BE:EF:00:00=Sauna.
-    alias: Vec<Alias>,
+    alias: Vec<utils::Alias>,
 
 }
 
 
-#[tokio::main]
+#[ntex::main]
 async fn main() {
     env_logger::init();
 
@@ -55,28 +51,31 @@ async fn main() {
     let aliasmap = utils::alias_map(&options.alias);
     debug!("Alias map: {:?}",aliasmap);
 
-    // To store the latest measurement from each tag
-    // let latest_measurements = Arc::new(Mutex::new(HashMap::new()));
+    // Channel for passing measurement for MQTT sender task
+    // Holds the measurements in memory if broker is down until channel
+    // limits are reached
+    let (to_mqtt_tx, mut to_mqtt_rx) = mpsc::channel(1024);
 
-    // Clone the handle for the latest measuements to pass it fowrards for the writer
-    // let measurement_input = latest_measurements.clone();
-
-    let (from_ruuvi_tx, mut from_ruuvi_rx) = mpsc::channel(32);
-    let from_ruuvi_tx2 = from_ruuvi_tx.clone();
+    // Latest measurements from RuuviTags
+    let latest: Arc<Mutex<HashMap<[u8; 6], ruuvi::Measurement>>> = Arc::new(Mutex::new(HashMap::new()));
+    let latest2 = Arc::clone(&latest);
 
     let mut handles = Vec::new();
 
-    info!("Starting bluetooth");
-    handles.push(tokio::task::spawn(async move {
-        _ = ruuvi::poll(from_ruuvi_tx2).await;
+    // Task for polling BLE messages and storing them in an array
+    handles.push(ntex::rt::spawn(async move {
+        _ = ruuvi::poll(latest).await;
     }));
 
-
-    handles.push(tokio::task::spawn(async move {
-        _ = ruuvi::send_latest_to_broker(from_ruuvi_rx).await;
+    // Task executed periodically to add measurements in a queue (channel)
+    // to be sent to the MQTT broker
+    handles.push(ntex::rt::spawn(async move {
+        _ = mqtt::add_latest_measurements_to_send_queue(to_mqtt_tx, latest2).await;
     }));
-    //ruuvi::poll().await;
-    //println!("Sizeof measurement: {:?}", mem::size_of::<ruuvi::Measurement>());
+
+    handles.push(ntex::rt::spawn(async move {
+        _ = mqtt::mqtt_sender(to_mqtt_rx).await;
+    }));
 
     for handle in handles {
         let output = handle.await.expect("Panic in task");
