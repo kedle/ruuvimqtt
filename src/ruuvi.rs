@@ -20,16 +20,28 @@ pub struct Measurement {
     pub values: SensorValues,
 }
 
+impl Measurement {
+    fn mac_as_str(&self) -> String {
+    self.values
+        .mac_address()
+        .unwrap()
+        .iter()
+        .map( |&byte| format!("{:x}", byte)+ ":")
+        .collect::<String>()
+    }
+}
+
 // Formats a measurement as JSON suitable for publishing with MQTT
 impl fmt::Display for Measurement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 
-        let mac = match self.values.mac_address() {
-            Some(val) => {
-                let string_mac: String = val.iter().map( |&byte| format!("{:x}", byte)+ ":").collect();
-                format!("\"mac\":\"{}\"",string_mac)},
-            None => {format!("\"mac\":null")},
-        };
+        // let mac = match self.values.mac_address() {
+        //     Some(val) => {
+        //         let string_mac: String = val.iter().map( |&byte| format!("{:x}", byte)+ ":").collect();
+        //         format!("\"mac\":\"{}\"",string_mac)},
+        //     None => {format!("\"mac\":null")},
+        // };
+        let mac = self.mac_as_str();
 
         let temperature = match self.values.temperature_as_millicelsius() {
             Some(val) => {format!("\"temperature\":\"{}\"", val.to_string())},
@@ -66,7 +78,7 @@ impl fmt::Display for Measurement {
             None => {format!("\"tx\":null")},
         };
 
-        write!(f, "{{\"time\":\"{}\",{},{},{},{},{},{},{},{}}}",
+        write!(f, "{{\"time\":\"{}\",\"mac\":\"{}\",,{},{},{},{},{},{},{}}}",
         self.timestamp,
         mac,
         temperature,
@@ -109,11 +121,11 @@ async fn update_latest_measurement_array(
     let latest_check = latest_changer.get(&mac);
     match latest_check {
         Some(latest_measurement) => {
-            debug!("Updating latest measurement for {:?}", mac);
+            debug!("Updating latest measurement for {:?}", latest_measurement.mac_as_str());
             latest_changer.insert(mac, measurement);
         },
         None => {
-            debug!("No measurements found for {:?}, saving this one", mac);
+            debug!("No measurements found for {:?}, saving this one", measurement.mac_as_str());
             latest_changer.insert(mac, measurement);
         },
     }

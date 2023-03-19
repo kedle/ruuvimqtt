@@ -8,7 +8,6 @@ edition = "2021"
 
 [dependencies]
 btleplug = "0.10.4"
-clap = { version = "3.*", features = ["derive"] }
 tokio = { version = "1.23.0", features = ["full"] }
 ruuvi-sensor-protocol = "0.6.1"
 futures = "0.3.25"
@@ -17,3 +16,6 @@ env_logger = "0.9.0"
 regex = "1.7.0"
 uuid = { version = "1.3.0", features = ["v4"]}
 rumqttc = "0.20.0"
+clap = { version = "4.1.10", features = ["derive"] }
+toml = "0.7.3"
+serde = { version =  "1.0.157", features = ["derive"] }
